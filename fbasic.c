@@ -59,13 +59,9 @@
 
 extern char **environ;
 
-/* Garbage collecting malloc */
-
-#include "gc.h"
-
 /* FBASIC version */
 
-#define VERSION		"2.2"
+#define VERSION		"2.3"
 
 /* Set to 1 if your machine supports unaligned access to doubles */
 /* (should be set to 1 for maximum efficiency on Intel, must be set to 0
@@ -664,27 +660,30 @@ static void error(int error) {
 static void *get_memory(int n) {
     void *p;
 
-    p = GC_MALLOC(n);
+    p = malloc(n);
     if (p == NULL)
 	error(ERROR_OM);
     return p;
 }
 
-/* Allocate memory, no pointers contained within */
-
+/**
+ * Allocates memory
+ * @param[in] The amount of memory
+ * @returns The memory (or NULL if it fails)
+ */
 static void *get_memory_atomic(int n) {
-    void *p;
-
-    p = GC_MALLOC_ATOMIC(n);
-    if (p == NULL)
+	void *p;
+	
+	p = malloc(n);
+	if (p == NULL)
 	error(ERROR_OM);
-    return p;
+	return p;
 }
 
 /* Reallocate memory */
 
 static void *increase_memory(void *p, int n) {
-    p = GC_realloc(p, n);
+    p = realloc(p, n);
     if (p == NULL)
 	error(ERROR_OM);
     return p;
@@ -693,27 +692,27 @@ static void *increase_memory(void *p, int n) {
 /* Free memory */
 
 static void free_memory(void *p) {
-    GC_free(p);
+    free(p);
 }
 
 /* Force garbage collection */
 
 static void garbage_collect(void) {
-    GC_gcollect();
+    // TO-DO
 }
 
 #if 0
 /* Return number of garbage collections */
 
 static int n_gc(void) {
-    return GC_gc_no;
+    return 0;
 }
 #endif
 
 /* Return heap size, just data */
 
 static int heap_size(void) {
-    return GC_get_heap_size() - MAX_PROGRAM;
+    return 65536;	// no idea what really goes here
 }
 
 /* Check filenumber range */
@@ -888,43 +887,52 @@ static void get_line(char *s, int n) {
     check_break();
 }
 
-/* Output character */
-
+/**
+ * Prints a new-line character (either \n or \r\n based
+ * on the macros at the top of this file)
+ */
 static void crlf(void);
 
+/**
+ * Outputs a single character
+ * @param[in] The character
+ * @remarks The main reason of using this over standard C
+ * or curses functions is it works on a bunch of global
+ * variables (and it looks like curses is optional too).
+ */
 static void cout(char c) {
-    if (coutp) {
-	if (coutn >= coutmax) {
-	    coutmax += 1024;
-	    coutp = increase_memory(coutp, coutmax);
+	if (coutp) {
+		if (coutn >= coutmax) {
+			coutmax += 1024;
+			coutp = increase_memory(coutp, coutmax);
+		}
+		coutp[coutn++] = c;
+		return;
 	}
-	coutp[coutn++] = c;
-	return;
-    }
 
-    ++cout_n;
+	++cout_n;
 
-    if (use_curses && (current_file == stdout)) {
-	if (addch(c) == ERR)
-	    error(ERROR_IO);
-	    /* WIDTH not effective in CURSES mode */
-	    return;
-    }
+	if (use_curses && (current_file == stdout)) {
+		if (addch(c) == ERR)
+			error(ERROR_IO);
+		/* WIDTH not effective in CURSES mode */
+		return;
+	}
 
-    if (putc(c, current_file) == EOF)
-	error(ERROR_IO);
+	if (putc(c, current_file) == EOF)
+		error(ERROR_IO);
 
-    if (c == 8)
-	--*ppos;
-    else if (c == 13)
-	*ppos = 0;
-    else if (c == 10)
-	*ppos = 0;
-    else if (c != 7)
-	++*ppos;
+	if (c == 8)
+		--*ppos;
+	else if (c == 13)
+		*ppos = 0;
+	else if (c == 10)
+		*ppos = 0;
+	else if (c != 7)
+		++*ppos;
 
-    if ((*pwidth > 0) && (*ppos >= *pwidth))
-	crlf();
+	if ((*pwidth > 0) && (*ppos >= *pwidth))
+		crlf();
 }
 
 /* String out */
@@ -4544,1127 +4552,1083 @@ static void do_auto(double start, double inc) {
     }
 }
 
-/* Execute. We are entered with a pointer to a token buffer, which
+/**
+ * Runs a BASIC instruction
+ * @param[in] The instruction (token)
+ * @remarks We are entered with a pointer to a token buffer, which
  * we execute until EOP or an editing command. If one of the commands
  * is GOSUB, GOTO, RUN which transfer control to a numbered line,
  * we will begin executing from program space.
  */
-
 static void execute(unsigned char *t) {
-    int tkn;
-    double x, x1, x2;
-    unsigned char *p, *p2;
-    int i, in_if;
-    basic_string s, s2;
-    void *valuep, *valuep2;
-    char *sp;
-    int *pi;
+	int tkn, i, in_if;
+	double x, x1, x2;
+	unsigned char *p, *p2;
+	basic_string s, s2;
+	void *valuep, *valuep2;
+	char *sp;
+	int *pi;
 
-    in_if = 0;
-    FOREVER {
-	check_break();
-	tkn = *t;
-	if (!inerror && running)
-	    current_loc = t;
-	if (ontimerflag) {
-	    time_t last_time;
-	    unsigned char *g;
+	in_if = 0;
+	FOREVER {
+		check_break();
+		tkn = *t;
+		if (!inerror && running)
+			current_loc = t;
+		if (ontimerflag) {
+			time_t last_time;
+			unsigned char *g;
 
-	    last_time = current_time;
-	    time(&current_time);
-	    secondsleft -= (current_time - last_time);
-	    if (secondsleft <= 0) {
-		secondsleft = ontimevalue;
-		if (gosubstack_ptr >= GOSUB_MAX)
-		    error(ERROR_GOSUB);
-		gosubstack[gosubstack_ptr++] = t;
-		g = ontimer;
-		x = expression(&g);
-		t = find_line_strict(x);
-		continue;
-	    }
-	}
-	if (token_optional(&t, CONSTANT)) {
-	    current_line = R(t);
-	    t += sizeof(double);
-	    tkn = *t;
-	    if (ftrace) {
-		sprintf(src, "[%.10G]", current_line);
-		sout(src);
-		flush_out();
-	    }
-	}
-	switch (tkn) {
-	case EOL:
-	case EOP:
-	case COLON:
-	case ELSE:
-	    break;
-	case CONT:
-	    t = current_loc;
-	    if (t == NULL)
-		return;
-	    if (*t == STOP)
-		++t;
-	    else if (*t == CONSTANT) {
-		/* line_number STOP */
-		if (t[1+sizeof(double)] == STOP)
-		    t += 2+sizeof(double);
-	    }
-	    running = YES;
-	    continue;
-	case LLIST:
-	    select_file(PRINTER);
-	    /* drop through to LIST */
-	case LIST:	/* LIST [x1][-x2] */
-	    ++t;
-	    t = two_ln(t, &x1, &x2);
-	    if (x1 == DEFAULT_LN) {
-		x1 = LOW_LN;
-		x2 = HIGH_LN;
-	    }
-	    if (x2 == DEFAULT_LN)
-		x2 = x1;
-	    for (p = sop(); *p != EOP; ) {
-		if (*p == CONSTANT)
-		    x = R(p + 1);
-		else
-		    x = x1;
-		if ((x1 <= x) && (x <= x2)) {
-		    list_line(p, src);
-		    sout(src);
-		    crlf();
+			last_time = current_time;
+			time(&current_time);
+			secondsleft -= (current_time - last_time);
+			if (secondsleft <= 0) {
+				secondsleft = ontimevalue;
+				if (gosubstack_ptr >= GOSUB_MAX)
+					error(ERROR_GOSUB);
+					gosubstack[gosubstack_ptr++] = t;
+					g = ontimer;
+					x = expression(&g);
+					t = find_line_strict(x);
+					continue;
+				}
+			}
+			if (token_optional(&t, CONSTANT)) {
+				current_line = R(t);
+				t += sizeof(double);
+				tkn = *t;
+				if (ftrace) {
+				sprintf(src, "[%.10G]", current_line);
+				sout(src);
+				flush_out();
+			}
 		}
-		p = skip(p);
-	    }
-	    break;
-	case DELETE:	/* DELETE x1[-x2] */
-	    if (noedit)
-		error(ERROR_NOEDIT);
-	    ++t;
-	    t = delete_range(t);
-	    clear_execution_state();
-	    return;
-	case EDIT:
-	    ++t;
-	    t = two_ln(t, &x1, &x2);
-	    if (x1 == DEFAULT_LN) {
-		int k = use_curses;
-		char buf[256], *sp;
-		char fn[256];
+		switch (tkn) {
+			case EOL:
+			case EOP:
+			case COLON:
+			case ELSE:
+				break;
+			case CONT:
+				t = current_loc;
+				if (t == NULL) return;
+				if (*t == STOP)
+					++t;
+				else if (*t == CONSTANT) {
+					/* line_number STOP */
+					if (t[1+sizeof(double)] == STOP)
+						t += 2+sizeof(double);
+				}
+				running = YES;
+				continue;
+			case LLIST:
+				select_file(PRINTER);
+				/* drop through to LIST */
+			case LIST:	/* LIST [x1][-x2] */
+				++t;
+				t = two_ln(t, &x1, &x2);
+				if (x1 == DEFAULT_LN) {
+					x1 = LOW_LN;
+					x2 = HIGH_LN;
+				}
+				if (x2 == DEFAULT_LN)
+					x2 = x1;
+				for (p = sop(); *p != EOP; ) {
+					if (*p == CONSTANT)
+						x = R(p + 1);
+					else x = x1;
+					if ((x1 <= x) && (x <= x2)) {
+						list_line(p, src);
+						sout(src);
+						crlf();
+					}
+					p = skip(p);
+				}
+				break;
+			case DELETE:	/* DELETE x1[-x2] */
+				if (noedit)
+					error(ERROR_NOEDIT);
+				++t;
+				t = delete_range(t);
+				clear_execution_state();
+				return;
+			case EDIT:
+				++t;
+				t = two_ln(t, &x1, &x2);
+				if (x1 == DEFAULT_LN) {
+					int k = use_curses;
+					char buf[256], *sp;
+					char fn[256];
 
-		exit_cursesx();
-		strcpy(fn, tmpnam(NULL));
-		strcat(fn, ".bas");
-		save_ascii(fn);
-		sp = getenv("FBASIC_EDIT");
-		if (sp == NULL)
-		    sp = "vi";
-		strcpy(buf, sp);
-		strcat(buf, " ");
-		strcat(buf, fn);
-		system(buf);
-		load(fn);
-		unlink(fn);
-		if (k)
-		    enter_curses();
-		return;
-	    }
-	    if (noedit)
-		error(ERROR_NOEDIT);
-	    p = find_line_strict(x1);
-	    edit(p);
-	    clear_execution_state();
-	    return;
-	case NEW:
-	    program[0] = START;
-	    program[1] = EOP;
-	    noedit = NO;
-	    t = sop();
-	    clear_execution_state();
-	    return;
-	case FREE:
-	    ++t;
-	    x = eop() - program;
-	    garbage_collect();
-	    sprintf(src,
-	  "Program size %.10G, Free %.10G, Heap size %d",
-		x, MAX_PROGRAM - x,
-		heap_size());
-	    sout(src);
-	    crlf();
-	    break;
-	case SAVE:
-	    /* SAVE "filename" [,A] */
-	    ++t;
-	    s = sexpression(&t);
-	    clear_execution_state();
-	    if (token_optional(&t, COMMA))
-		save_ascii(cstring(s));
-	    else
-		save(cstring(s));
-	    return;
-	case LOAD:
-	    ++t;
-	    s = sexpression(&t);
-	    clear_execution_state();
-	    load(cstring(s));
-	    return;
-	case MERGE:
-	    ++t;
-	    s = sexpression(&t);
-	    clear_execution_state();
-	    merge(cstring(s));
-	    return;
-	case TROFF:
-	    ++t;
-	    ftrace = 0;
-	    break;
-	case TRON:
-	    ++t;
-	    ftrace = 1;
-	    break;
-	case SYSTEM:
-	    ++t;
-	    if (!statement_end(t)) {
-		s = sexpression(&t);
-		external_execute(cstring(s), NULL);
-	    } else {
-		exit_cursesx();
-		exit(0);
-	    }
-	    break;
-	case DATA:
-	    t = skip_statement(t) - 1;
-	    break;
-	case OPTION:
-	    t = skip_statement(t) - 1;
-	    break;
-	case REM:
-	    t = skip(t) - 1;
-	    break;
-	case STOP:
-	    erl = current_line;
-	    /* Fall through to END */
-	case END:
-	    return;
-	case LET:
-	    ++t;
-	    if (*t == MID)
-		goto assign_mid;
-	    /* Fall through to VARIABLE */
-	case VARIABLE:	/* VARIABLE = expression */
-	    p = t;
-	    valuep = dimensioned_variable(&t);
-	    eat_token(&t, EQUAL);
-	    if (is_string_variable(p)) {
-		s = sexpression(&t);
-		store_string(p, valuep, s);
-	    } else {
-		x = expression(&t);
-		store_number(p, valuep, x);
-	    }
-	    break;
-	case RUN:
-	    ++t;
-	    t = two_ln(t, &x1, &x2);
-	    if (x1 == DEFAULT_LN)
-		t = sop();
-	    else
-		t = find_line_strict(x1);
-	    clear_execution_state();
-	    in_if = 0;
-	    running = YES;
-	    continue;
-	case GOSUB:
-	    if (gosubstack_ptr >= GOSUB_MAX)
-		error(ERROR_GOSUB);
-	    gosubstack[gosubstack_ptr++] =
-		skip_statement(t);
-	    /* Drop through to GOTO */
-	case GOTO:
-	    ++t;
-bgoto:	    x = expression(&t);
-	    t = find_line_strict(x);
-	    in_if = 0;
-	    running = YES;
-	    continue;
-	case RETURN:
-	    if (gosubstack_ptr == 0)
-		error(ERROR_GOSUB);
-	    t = gosubstack[--gosubstack_ptr];
-	    in_if = 0;
-	    running = YES;
-	    continue;
-	case IF:
-	    ++t;
-	    x = expression(&t);
-	    eat_token(&t, THEN);
-	    if (x) {
-		if (*t == CONSTANT)
-		    goto bgoto;
-		    in_if = 1;
-		    continue;
-	    }
-	    t = skip_else(t);
-	    if (*t == CONSTANT)
-		goto bgoto;
-	    continue;
-	case READ:
-	    do
-		t = handle_read(++t);
-	    while (*t == COMMA);
-	    break;
-	case WHILE:
-	    for (i = 0; i < whilestack_ptr; ++i)
-		if (whilestack[i] == t) {
-		    whilestack_ptr = i;
-		    break;
-		}
-	    if (whilestack_ptr == WHILE_MAX)
-		error(ERROR_WHILE);
-	    whilestack[whilestack_ptr++] = t;
-	    ++t;
-	    x = expression(&t);
-	    if (x)
-		NOTHING;
-	    else {
-		--whilestack_ptr;
-		for (i = 1; i != 0; ) {
-		    t = skip_to_while_wend(t);
-		    if (*t == EOL)
+					exit_cursesx();
+					strcpy(fn, tmpnam(NULL));
+					strcat(fn, ".bas");
+					save_ascii(fn);
+					sp = getenv("FBASIC_EDIT");
+					if (sp == NULL) sp = "vi";
+					strcpy(buf, sp);
+					strcat(buf, " ");
+					strcat(buf, fn);
+					system(buf);
+					load(fn);
+					unlink(fn);
+					if (k) enter_curses();
+					return;
+				}
+				if (noedit)
+					error(ERROR_NOEDIT);
+				p = find_line_strict(x1);
+				edit(p);
+				clear_execution_state();
+				return;
+			case NEW:
+				program[0] = START;
+				program[1] = EOP;
+				noedit = NO;
+				t = sop();
+				clear_execution_state();
+				return;
+			case FREE:
+				++t;
+				x = eop() - program;
+				garbage_collect();
+				sprintf(src,
+					"Program size %.10G, Free %.10G, Heap size %d",
+					x, MAX_PROGRAM - x,
+					heap_size()
+				);
+				sout(src);
+				crlf();
+				break;
+			case SAVE:
+				/* SAVE "filename" [,A] */
+				++t;
+				s = sexpression(&t);
+				clear_execution_state();
+				if (token_optional(&t, COMMA))
+					save_ascii(cstring(s));
+				else save(cstring(s));
+				return;
+			case LOAD:
+				++t;
+				s = sexpression(&t);
+				clear_execution_state();
+				load(cstring(s));
+				return;
+			case MERGE:
+				++t;
+				s = sexpression(&t);
+				clear_execution_state();
+				merge(cstring(s));
+				return;
+			case TROFF:
+				++t;
+				ftrace = 0;
+				break;
+			case TRON:
+				++t;
+				ftrace = 1;
+				break;
+			case SYSTEM:
+				++t;
+				if (!statement_end(t)) {
+					s = sexpression(&t);
+					external_execute(cstring(s), NULL);
+				} else {
+					exit_cursesx();
+					exit(0);
+				}
+				break;
+			case DATA:
+				t = skip_statement(t) - 1;
+				break;
+			case OPTION:
+				t = skip_statement(t) - 1;
+				break;
+			case REM:
+				t = skip(t) - 1;
+				break;
+			case STOP:
+				erl = current_line;
+				/* Fall through to END */
+			case END:
+				return;
+			case LET:
+				++t;
+				if (*t == MID)
+				goto assign_mid;
+				/* Fall through to VARIABLE */
+			case VARIABLE:	/* VARIABLE = expression */
+				p = t;
+				valuep = dimensioned_variable(&t);
+				eat_token(&t, EQUAL);
+				if (is_string_variable(p)) {
+					s = sexpression(&t);
+					store_string(p, valuep, s);
+				} else {
+					x = expression(&t);
+					store_number(p, valuep, x);
+				}
+			break;
+		case RUN:
+			++t;
+			t = two_ln(t, &x1, &x2);
+			if (x1 == DEFAULT_LN)
+			t = sop();
+			else t = find_line_strict(x1);
+			clear_execution_state();
 			in_if = 0;
-		    else if (*t == WHILE)
-			++i;
-		    else if (*t == WEND)
-			--i;
-		    else if (*t == EOP)
-			error(ERROR_WHILE);
+			running = YES;
+			continue;
+		case GOSUB:
+			if (gosubstack_ptr >= GOSUB_MAX)
+				error(ERROR_GOSUB);
+			gosubstack[gosubstack_ptr++] = skip_statement(t);
+			/* Drop through to GOTO */
+		case GOTO:
 		    ++t;
-		}
-	    }
-	    continue;
-	case WEND:
-	    if (whilestack_ptr == 0)
-		error(ERROR_WHILE);
-	    t = whilestack[--whilestack_ptr];
-		continue;
-	case LPRINT:
-	    select_file(PRINTER);
-	    /* drop through to PRINT */
-	case PRINT:
-	    ++t;
-	    p = NULL;
-	    valuep = NULL;
-	    if (token_optional(&t, HASH)) {
-		if (is_string_variable(t)) {
-		    outdev = -99;
-		    p = t;
-		    valuep =
-			dimensioned_variable(&t);
-		    coutmax = 1024;
-		    coutp =
-			get_memory_atomic(coutmax);
-		    coutn = 0;
-		    ppos = &coutn;
-		} else
-		    select_file(expression(&t));
-	    }
-	    if (token_optional(&t, USING)) {
-		t = print_using(t);
-		/* Skip any unused expressions */
-		t = skip_statement(t) - 1;
-	    } else
-		t = print(t);
-	    if (p) {
-		s = make_string(0);
-		s.storage = coutp;
-		s.length = coutn;
-		store_string(p, valuep, s);
-		coutp = NULL;
-	    } else {
-		if (t[-1] != SEMI)
-		    crlf();
-	    }
-	    break;
-	case WRITE:
-	    ++t;
-	    if (token_optional(&t, HASH))
-		select_file(expression(&t));
-	    t = handle_write(t);
-	    break;
-	case RANDOMIZE:
-	    ++t;
-	    srand((int)expression(&t));
-	    break;
-	case FOR:
-	    /* FOR I = 1 TO 10 [STEP 1]...NEXT [I] */
-	    for (i = 0; i < forstack_ptr; ++i)
-		if (forstack[i] == t) {
-		    forstack_ptr = i;
-		break;
-		}
-	    if (forstack_ptr == FOR_MAX)
-		error(ERROR_FOR);
-	    forstack[forstack_ptr++] = t;
-	    p = ++t;
-	    token_needed(t, VARIABLE);
-	    t = skip_variable(t);
-	    eat_token(&t, EQUAL);
-	    set_variable(p, expression(&t));
-	    t = skip_statement(t) - 1;
-	    /* FIXME - see WHILE for zero-trip */
-	    p = forstack[forstack_ptr - 1];
-	    p2 = ++p;
-	    x = get_variable(&p);
-	    ++p;
-	    expression(&p);
-	    eat_token(&p, TO);
-	    x1 = expression(&p);
-	    if (token_optional(&p, STEP))
-		x2 = expression(&p);
-	    else
-		x2 = 1.0;
-	    if ((x2 > 0) ? (x <= x1) : (x >= x1))
-		NOTHING;
-	    else {
-		--forstack_ptr;
-		for (i = 1; i != 0; ) {
-		    t = skip_to_for_next(t);
-		    if (*t == EOL)
+bgoto:
+			x = expression(&t);
+			t = find_line_strict(x);
 			in_if = 0;
-		    else if (*t == FOR)
-			++i;
-		    else if (*t == NEXT)
-			--i;
-		    else if (*t == EOP)
-			error(ERROR_FOR);
+			running = YES;
+			continue;
+		case RETURN:
+			if (gosubstack_ptr == 0)
+				error(ERROR_GOSUB);
+			t = gosubstack[--gosubstack_ptr];
+			in_if = 0;
+			running = YES;
+			continue;
+		case IF:
 		    ++t;
-		}
-		t = skip_statement(t) - 1;
-	    }
-	    break;
-	case NEXT:
-	    if (forstack_ptr == 0)
-		error(ERROR_FOR);
-	    ++t;
-	    p = forstack[--forstack_ptr];
-	    if (*t == VARIABLE) {
-		while (forstack_ptr &&
-		       (strcmp((char *)t+2,
-		       (char *)p+3) != 0))
-		    p = forstack[--forstack_ptr];
-		if (strcmp((char *)t+2,
-		   (char *)p+3) != 0)
-		    error(ERROR_FOR);
-		t = skip_variable(t);
-	    }
-	    forstack[forstack_ptr++] = p;
-	    p2 = ++p;
-	    x = get_variable(&p);
-	    ++p;
-	    expression(&p);
-	    eat_token(&p, TO);
-	    x1 = expression(&p);
-	    if (token_optional(&p, STEP))
-		x2 = expression(&p);
-	    else
-		x2 = 1.0;
-	    x = x + x2;
-	    set_variable(p2, x);
-	    if ((x2 > 0) ? (x <= x1) : (x >= x1))
-		t = p;
-	    else
-		--forstack_ptr;
-	    break;
-	case ERROR:
-	    ++t;
-	    error((int)expression(&t));
-	    break;
-	case RESTORE:
-	    ++t;
-	    if (!statement_end(t))
-		data = find_line_strict(expression(&t));
-	    else
-		data = sop();
-	    break;
-	case DIM:
-	    do
-		t = dim(++t);
-	    while (*t == COMMA);
-	    break;
-	case POKE:
-	    i = 0;
-poke_out:   ++t;
-	    x1 = expression(&t);
-	    comma(&t);
-	    x2 = expression(&t);
-	    if (i == 0)
-		poke((size_t)x1, (unsigned char)x2);
-	    else
-		out((int)x1, (unsigned char)x2);
-	    break;
-	case OUT:
-	    i = 1;
-	    goto poke_out;
-	case LSET:
-	    i = 0;
-set_lr:     ++t;
-	    need_string_variable(t);
-	    p = t;
-	    t = skip_variable(t);
-	    eat_token(&t, EQUAL);
-	    s = sexpression(&t);
-	    lr_set_string(p, s, i);
-	    break;
-	case RSET:
-	    i = 1;
-	    goto set_lr;
-	case ERASE:
-	    do
-		t = ferase(++t);
-	    while (*t == COMMA);
-	    break;
-	case COMMON:
-	    do
-		t = common(++t);
-	    while (*t == COMMA);
-	    break;
-	case BEEP:
-	    ++t;
-	    if (use_curses)
-		beep();
-	    else
-		cout(7);
-	    break;
-	case SLEEP:
-	    ++t;
-	    sleep((int)expression(&t));
-	    break;
-	case SWAP:
-	    ++t;
-	    token_needed(t, VARIABLE);
-	    i = is_string_variable(t);
-	    valuep = dimensioned_variable(&t);
-	    if (valuep == NULL) {
-		if (i)
-		    valuep = address_string(
-			(char *)p+2);
-		    else
-			valuep = address_scalar(
-			    (char *)p+2);
-	    }
-	    comma(&t);
-	    token_needed(t, VARIABLE);
-	    if (is_string_variable(p))
-		if (!is_string_variable(t))
-		    error(ERROR_SYNTAX);
-	    if (!is_string_variable(p))
-		if (is_string_variable(t))
-		    error(ERROR_SYNTAX);
-	    valuep2 = dimensioned_variable(&t);
-	    if (valuep2 == NULL) {
-		if (i)
-		    valuep2 = address_string(
-					    (char *)p+2);
-		else
-		    valuep2 = address_scalar(
-					    (char *)p+2);
-	    }
-	    if (i) {
-		s = *(basic_string *)valuep;
-		*(basic_string *)valuep =
-		    *(basic_string *)valuep2;
-		*(basic_string *)valuep2 = s;
-	    } else {
-		x = *(double *)valuep;
-		*(double *)valuep = *(double *)valuep2;
-		*(double *)valuep2 = x;
-	    }
-	    break;
-	case OPEN:
-	    /* OPEN "IORAB", #n, fn, rlen */
-	    ++t;
-	    {
-	    int mode;
-	    basic_string filename;
-	    int filenumber, reclen;
-
-	    s = sexpression(&t);
-	    if (s.length == 0)
-		error(ERROR_SYNTAX);
-	    mode = s.storage[0];
-	    if (('a' <= mode) && (mode <= 'z'))
-		mode = mode - 'a' + 'A';
-	    switch (mode) {
-		case 'I': mode = MODE_INPUT; break;
-		case 'O': mode = MODE_OUTPUT; break;
-		case 'R': mode = MODE_RANDOM; break;
-		case 'A': mode = MODE_APPEND; break;
-		case 'B': mode = MODE_BINARY; break;
-		default: error(ERROR_SYNTAX);
-	    }
-	    comma(&t);
-	    token_optional(&t, HASH);
-	    filenumber = expression(&t);
-	    comma(&t);
-	    filename = sexpression(&t);
-	    reclen = 128;
-	    if (token_optional(&t, COMMA))
-		reclen = expression(&t);
-	    open_file(mode, filenumber, cstring(filename),
-		      reclen);
-	    }
-	    break;
-	case CLOSE:
-	    ++t;
-	    if (statement_end(t)) {
-		for (i = 0; i < MAX_FD; ++i)
-		    close_file(i);
-	    } else {
-		--t;
-		do {
-		    ++t;
-		    token_optional(&t, HASH);
-		    x = expression(&t);
-		    close_file((int)x);
-		} while (*t == COMMA);
-	    }
-	    break;
-	case INPUT:
-	    ++t;
-	    if ((*t == HASH) || (*t == CONSTANT)) {
-		token_optional(&t, HASH);
-		select_file(expression(&t));
-		comma(&t);
-	    }
-	    t = input(t);
-	    break;
-	case LINE:
-	    /* LINE INPUT */
-	    ++t;
-	    eat_token(&t, INPUT);
-	    if ((*t == HASH) || (*t == CONSTANT)) {
-		token_optional(&t, HASH);
-		select_file(expression(&t));
-		comma(&t);
-	    }
-	    t = line_input(t);
-	    break;
-	case FIELD:
-	    {
-	    int fn, n;
-	    char *buf;
-	    basic_string s;
-
-	    ++t;
-	    if (token_optional(&t, ON)) {
-		buf = (char *)(size_t)expression(&t);
-	    } else {
-		token_optional(&t, HASH);
-		fn = expression(&t);
-		buf = files[fn].buffer;
-	    }
-	    comma(&t);
-	    FOREVER {
-		if (statement_end(t))
-		    break;
-		n = expression(&t);
-		eat_token(&t, AS);
-		need_string_variable(t);
-		t += 2;
-		s.length = n;
-		s.storage = buf;
-		create_string((char *)t, s);
-		buf += n;
-		t += t[-1];	/* XXX */
-		token_optional(&t, COMMA);
-	    }
-	    }
-	    break;
-	case GET:
-	    {
-	    int fn;
-	    int rec;
-
-	    ++t;
-	    token_optional(&t, HASH);
-	    fn = expression(&t);
-	    comma(&t);
-	    rec = expression(&t);
-	    if (files[fn].mode == MODE_RANDOM) {
-		fseek(pfile(fn),
-		  files[fn].reclen * rec,
-		  SEEK_SET);
-		fread(files[fn].buffer,
-		  files[fn].reclen,
-		  1,
-		  pfile(fn));
-	    } else
-		error(ERROR_IO);
-	    }
-	    break;
-	case PUT:
-	    {
-	    int fn;
-	    int rec;
-
-	    ++t;
-	    token_optional(&t, HASH);
-	    fn = expression(&t);
-	    comma(&t);
-	    rec = expression(&t);
-	    if (files[fn].mode == MODE_RANDOM) {
-		fseek(pfile(fn),
-		      files[fn].reclen * rec,
-		      SEEK_SET);
-		fwrite(files[fn].buffer,
-		       files[fn].reclen,
-		       1,
-		       pfile(fn));
-	    } else
-		error(ERROR_IO);
-	    }
-	    break;
-	case DEF:
-	    ++t;
-	    if (*t == INT) {
-		do
-		    t = handle_deftype('%', ++t);
-		while (*t == COMMA);
-	    } else if (*t == SNG) {
-		do
-		    t = handle_deftype('!', ++t);
-		while (*t == COMMA);
-	    } else if (*t == FN) {	/* FN */
-		/* Function definition, record the
-		 * start token location
-		 */
-		++t;
-		token_needed(t, VARIABLE);
-		fns[t[2]] = t;
-		t = skip_statement(t) - 1;
-	    } else if (*t == STR) {
-		do
-		    t = handle_deftype('$', ++t);
-		while (*t == COMMA);
-	    } else if (*t == DBL) {
-		do
-		    t = handle_deftype('!', ++t);
-		while (*t == COMMA);
-	    } else if (*t == SEG) {
-		++t;
-		token_needed(t, EQUAL);
-		seg = expression(&t);
-	    } else
-		error(ERROR_SYNTAX);
-	    break;
-	case CLEAR:
-	    t = skip_statement(t) - 1;
-	    fclear();
-	    break;
-	case FILES:
-	    /* FILES -- pass string to ls command */
-	    ++t;
-	    if (!statement_end(t)) {
-		s = sexpression(&t);
-		sp = cstring(s);
-	    } else
-		sp = "";
-	    external_execute("ls", sp);
-	    break;
-	case KILL:
-	    ++t;
-	    s = sexpression(&t);
-	    sp = cstring(s);
-	    if (unlink(sp) == -1)
-		error(ERROR_IO);
-	    break;
-	case VARS:
-	    t = skip_statement(t) - 1;
-	    vars();
-	    break;
-	case CURSESF:
-	    {
-	    int f;
-
-	    ++t;
-	    if (*t == ON) {
-		++t;
-		f = 1;
-	    } else if (*t == OFF) {
-		++t;
-		f = 0;
-	    } else
-		f = expression(&t);
-	    if (!use_curses && f)
-		enter_curses();
-	    else if (use_curses && !f) {
-		exit_cursesx();
-		ansi_cls();
-	    }
-	    }
-	    break;
-	case RESUME:
-	    ++t;
-	    if (!inerror)
-		error(ERROR_SYNTAX);
-	    running = YES;
-	    inerror = NO;
-	    if (token_optional(&t, NEXT))
-		t = skip_statement(current_loc);
-	    else if (statement_end(t))
-		t = current_loc;
-	    else {
-		x = onerror;
-		onerror = 0;
-		t = find_line_strict(expression(&t));
-		onerror = x;
-	    }
-	    continue;
-	    break;
-
-	case ON:
-	    {
-	    double idx;
-	    int mode;
-
-	    ++t;
-	    if (*t == TIMER) { /* ON TIMER(x) GOSUB */
-		++t;
-		idx = expression(&t);
-		secondsleft = ontimevalue = (int)idx;
-		eat_token(&t, GOSUB);
-		ontimer = t;
-		t = skip_statement(t) - 1;
-		time(&current_time);
-		if (ontimevalue <= 0) {
-		    ontimer = NULL;
-		    ontimerflag = NO;
-		} else
-		    ontimerflag = YES;
-		break;	/* case */
-	    } else if (*t == 32) { /* ON ERROR */
-		++t;
-		if (token_optional(&t, RESUME)) {
-		    eat_token(&t, NEXT);
-		    /* ON ERROR RESUME NEXT */
-		    onerror = -1;
-		} else {
-		    eat_token(&t, GOTO);
-		    /* ON ERROR GOTO */
-		    onerror = expression(&t);
-		    if (onerror != 0)
-			find_line_strict(
-					onerror);
-		}
-		break; /* case */
-	    }
-
-	    idx = intx(expression(&t));
-	    if (*t == GOSUB) { /* ON e GOSUB */
-		++t;
-		mode = 1;
-	    } else if (*t == GOTO) { /* ON e GOTO */
-		++t;
-		mode = 2;
-	    } else
-		error(ERROR_SYNTAX);
-	    for (; idx > 1; --idx) {
-		expression(&t);
-		token_optional(&t, COMMA);
-		if (statement_end(t))
-		    break;
-	    }
-	    if (idx == 1) {
-		if (mode == 1) {
-		    if (gosubstack_ptr >= GOSUB_MAX)
-			error(ERROR_GOSUB);
-		    gosubstack[gosubstack_ptr++] =
-			skip_statement(t);
-		}
-		goto bgoto;
-	    }
-	    t = skip_statement(t) - 1;
-	    }
-	    break;
-	case TIMER:	/* TIMER ON, OFF, STOP */
-	    ++t;
-	    if (*t == ON) {
-		if (ontimer)
-		    ontimerflag = YES;
-	    } else if (*t == OFF) {
-		ontimerflag = NO;
-	    } else if (*t == STOP) {
-		ontimerflag = NO;
-		ontimer = NULL;
-	    } else
-		error(ERROR_SYNTAX);
-	    ++t;
-	    break;
-	case LOCATE:
-	    /* LOCATE row,col,cursor,start,stop */
-	    if (use_curses) {
-		int row = 0, col = 0, crs = 0;
-		int have_row = NO;
-		int have_col = NO;
-		int have_crs = NO;
-		int y, x;
-
-		++t;
-		if ((*t != COMMA) && !statement_end(t)) {
-		    row = expression(&t) - 1;
-		    have_row = YES;
-		}
-		token_optional(&t, COMMA);
-		if ((*t != COMMA) && !statement_end(t)) {
-		    col = expression(&t) - 1;
-		    have_col = YES;
-		}
-		token_optional(&t, COMMA);
-		if ((*t != COMMA) && !statement_end(t)) {
-		    crs = expression(&t);
-		    have_crs = YES;
-		}
-		token_optional(&t, COMMA);
-		getyx(sc, y, x);
-		if (!have_row)
-		    row = y;
-		if (!have_col)
-		    col = x;
-		move(row, col);
-		if (have_crs)
-		    curs_set(crs);
-	    }
-	    t = skip_statement(t) - 1;
-	    break;
-	case CLS:
-	    ++t;
-	    if (use_curses) {
-		erase();
-		move(0, 0);
-	    } else
-		ansi_cls();
-	    break;
-	case COLOR:
-	    ++t;
-	    if (use_curses) {
-		int n, f, b;
-
-		f = expression(&t);
-		comma(&t);
-		b = expression(&t);
-		n = ((b & 7) << 3) + (f & 7);
-		/* color_set(n, NULL) is not supported
-		 * under Solaris
-		 */
-		attrset(COLOR_PAIR(n));
-		bkgdset(' ' | COLOR_PAIR(n));
-	    } else
-		t = skip_statement(t) - 1;
-	    break;
-	case NULLF:
-	    ++t;
-	    nulls = expression(&t);
-	    break;
-	case CHAIN:
-	    /* CHAIN [MERGE] filename
-	     *	[,[line exp][,ALL][,DELETE range]]
-	     */
-	    {
-	    int mergeflag = NO;
-	    int allflag = NO;
-	    basic_string filename;
-
-	    ++t;
-	    x = -1;
-	    only_common_variables();
-	    if (*t == MERGE) {
-		if (noedit)
-		    error(ERROR_NOEDIT);
-		++t;
-		mergeflag = YES;
-	    }
-	    filename = sexpression(&t);
-	    while (token_optional(&t, COMMA)) {
-		if (*t == ALL) {
-		    ++t;
-		    allflag = YES;
-		} else if (*t == DELETE) {
-		    if (noedit)
-			error(ERROR_NOEDIT);
-		    ++t;
-		    t = delete_range(t);
-		} else if (*t == COMMA)
-		    ;
-		else
-		    x = expression(&t);
-	    }
-
-	    if (!allflag)
-		only_common_variables();
-
-	    if (mergeflag)
-		merge(cstring(filename));
-	    else
-		load(cstring(filename));
-
-	    if (x <= 0)
-		t = sop();
-	    else
-		t = find_line_strict(x);
-	    clear_execution_state();
-	    in_if = 0;
-	    running = YES;
-	    continue;
-	    }
-	case WAIT:
-	    /* WAIT port,and[,xor]*/
-	    ++t;
-	    x = expression(&t);
-	    comma(&t);
-	    x1 = expression(&t);
-	    if (token_optional(&t, COMMA))
-		x2 = expression(&t);
-	    else
-		x2 = 0;
-	    waitport(x, x1, x2);
-	    break;
-	case ENVIRON:
-	    ++t;
-	    s = sexpression(&t);
-	    sp = get_memory_atomic(strlen(cstring(s))+1);
-	    strcpy(sp, cstring(s));
-	    putenv(sp);
-	    free_memory(sp);
-	    break;
-	case CHDIR:
-	    ++t;
-	    s = sexpression(&t);
-	    sp = cstring(s);
-	    if (chdir(sp) == -1)
-		error(ERROR_IO);
-	    break;
-	case MKDIR:
-	    ++t;
-	    s = sexpression(&t);
-	    sp = cstring(s);
-	    if (mkdir(sp, 0777) == -1)
-		error(ERROR_IO);
-	    break;
-	case RMDIR:
-	    ++t;
-	    s = sexpression(&t);
-	    sp = cstring(s);
-	    if (rmdir(sp) == -1)
-		error(ERROR_IO);
-	    break;
-	case NAME:
-	    ++t;
-	    s = sexpression(&t);
-	    eat_token(&t, AS);
-	    s2 = sexpression(&t);
-	    if (rename(cstring(s), cstring(s2)) == -1)
-		error(ERROR_IO);
-	    break;
-	case WIDTH:
-	    ++t;
-	    pi = &width;
-	    if (token_optional(&t, LPRINT))
-		pi = &lwidth;
-	    else if (token_optional(&t, HASH)) {
-		pi = &(files[(int)expression(&t)].width);
-		comma(&t);
-	    }
-	    *pi = expression(&t);
-	    /* MBASIC uses 255 as a "magic" number. We use 0, but translate
-	     * here.
-	     */
-	    if (*pi == 255)
-		*pi = 0;
-	    break;
-	case RENUM:
-	    x = 0;
-	    goto ren_aut;
-	case AUTO:
-	    x = 1;
-ren_aut:    ++t;
-	    x1 = 10;
-	    x2 = 10;
-	    if (!statement_end(t)) {
-		if (*t != COMMA)
-		    x1 = expression(&t);
-		if (token_optional(&t, COMMA)) {
-		    if (!statement_end(t))
+			x = expression(&t);
+			eat_token(&t, THEN);
+			if (x) {
+				if (*t == CONSTANT)
+					goto bgoto;
+				in_if = 1;
+				continue;
+			}
+			t = skip_else(t);
+			if (*t == CONSTANT)
+				goto bgoto;
+			continue;
+		case READ:
+			do
+				t = handle_read(++t);
+			while (*t == COMMA);
+			break;
+		case WHILE:
+			for (i = 0; i < whilestack_ptr; ++i) {
+				if (whilestack[i] == t) {
+					whilestack_ptr = i;
+					break;
+				}
+			}
+			if (whilestack_ptr == WHILE_MAX)
+				error(ERROR_WHILE);
+			whilestack[whilestack_ptr++] = t;
+			++t;
+			x = expression(&t);
+			if (x)
+				NOTHING;
+			else {
+				--whilestack_ptr;
+				for (i = 1; i != 0; ) {
+					t = skip_to_while_wend(t);
+					if (*t == EOL)
+						in_if = 0;
+					else if (*t == WHILE)
+						++i;
+					else if (*t == WEND)
+						--i;
+					else if (*t == EOP)
+					error(ERROR_WHILE);
+					++t;
+				}
+			}
+			continue;
+		case WEND:
+			if (whilestack_ptr == 0)
+				error(ERROR_WHILE);
+			t = whilestack[--whilestack_ptr];
+			continue;
+		case LPRINT:
+			select_file(PRINTER);
+			/* drop through to PRINT */
+			case PRINT:
+			++t;
+			p = NULL;
+			valuep = NULL;
+			if (token_optional(&t, HASH)) {
+				if (is_string_variable(t)) {
+					outdev = -99;
+					p = t;
+					valuep =
+					dimensioned_variable(&t);
+					coutmax = 1024;
+					coutp = get_memory_atomic(coutmax);
+					coutn = 0;
+					ppos = &coutn;
+				}
+				else select_file(expression(&t));
+			}
+			if (token_optional(&t, USING)) {
+				t = print_using(t);
+				/* Skip any unused expressions */
+				t = skip_statement(t) - 1;
+			}
+			else t = print(t);
+			if (p) {
+				s = make_string(0);
+				s.storage = coutp;
+				s.length = coutn;
+				store_string(p, valuep, s);
+				coutp = NULL;
+			} else {
+				if (t[-1] != SEMI)
+					crlf();
+			}
+			break;
+		case WRITE:
+			++t;
+			if (token_optional(&t, HASH))
+				select_file(expression(&t));
+			t = handle_write(t);
+			break;
+		case RANDOMIZE:
+			++t;
+			srand((int)expression(&t));
+			break;
+		case FOR:
+			/* FOR I = 1 TO 10 [STEP 1]...NEXT [I] */
+			for (i = 0; i < forstack_ptr; ++i) {
+				if (forstack[i] == t) {
+					forstack_ptr = i;
+					break;
+				}
+			}
+			if (forstack_ptr == FOR_MAX)
+				error(ERROR_FOR);
+			forstack[forstack_ptr++] = t;
+			p = ++t;
+			token_needed(t, VARIABLE);
+			t = skip_variable(t);
+			eat_token(&t, EQUAL);
+			set_variable(p, expression(&t));
+			t = skip_statement(t) - 1;
+			/* FIXME - see WHILE for zero-trip */
+			p = forstack[forstack_ptr - 1];
+			p2 = ++p;
+			x = get_variable(&p);
+			++p;
+			expression(&p);
+			eat_token(&p, TO);
+			x1 = expression(&p);
+			if (token_optional(&p, STEP))
+				x2 = expression(&p);
+			else x2 = 1.0;
+			if ((x2 > 0) ? (x <= x1) : (x >= x1))
+				NOTHING;
+			else {
+				--forstack_ptr;
+				for (i = 1; i != 0; ) {
+					t = skip_to_for_next(t);
+					if (*t == EOL)
+						in_if = 0;
+					else if (*t == FOR)
+						++i;
+					else if (*t == NEXT)
+						--i;
+					else if (*t == EOP)
+						error(ERROR_FOR);
+					++t;
+				}
+				t = skip_statement(t) - 1;
+			}
+			break;
+		case NEXT:
+			if (forstack_ptr == 0)
+				error(ERROR_FOR);
+			++t;
+			p = forstack[--forstack_ptr];
+			if (*t == VARIABLE) {
+				while (forstack_ptr &&
+					(strcmp((char *)t+2,
+					(char *)p+3) != 0)
+				) p = forstack[--forstack_ptr];
+				if (strcmp((char *)t+2, (char *)p+3) != 0)
+					error(ERROR_FOR);
+				t = skip_variable(t);
+			}
+			forstack[forstack_ptr++] = p;
+			p2 = ++p;
+			x = get_variable(&p);
+			++p;
+			expression(&p);
+			eat_token(&p, TO);
+			x1 = expression(&p);
+			if (token_optional(&p, STEP))
+				x2 = expression(&p);
+			else x2 = 1.0;
+			x = x + x2;
+			set_variable(p2, x);
+			if ((x2 > 0) ? (x <= x1) : (x >= x1))
+				t = p;
+			else --forstack_ptr;
+			break;
+		case ERROR:
+			++t;
+			error((int)expression(&t));
+			break;
+		case RESTORE:
+			++t;
+			if (!statement_end(t))
+				data = find_line_strict(expression(&t));
+			else data = sop();
+			break;
+		case DIM:
+			do
+				t = dim(++t);
+			while (*t == COMMA);
+			break;
+		case POKE:
+			i = 0;
+poke_out:
+			++t;
+			x1 = expression(&t);
+			comma(&t);
 			x2 = expression(&t);
+			if (i == 0)
+				poke((size_t)x1, (unsigned char)x2);
+			else out((int)x1, (unsigned char)x2);
+			break;
+		case OUT:
+			i = 1;
+			goto poke_out;
+		case LSET:
+			i = 0;
+set_lr:
+			++t;
+			need_string_variable(t);
+			p = t;
+			t = skip_variable(t);
+			eat_token(&t, EQUAL);
+			s = sexpression(&t);
+			lr_set_string(p, s, i);
+			break;
+		case RSET:
+			i = 1;
+			goto set_lr;
+		case ERASE:
+			do
+				t = ferase(++t);
+			while (*t == COMMA);
+			break;
+		case COMMON:
+			do
+				t = common(++t);
+			while (*t == COMMA);
+			break;
+		case BEEP:
+			++t;
+			if (use_curses)
+				beep();
+			else cout(7);
+			break;
+		case SLEEP:
+			++t;
+			sleep((int)expression(&t));
+			break;
+		case SWAP:
+			++t;
+			token_needed(t, VARIABLE);
+			i = is_string_variable(t);
+			valuep = dimensioned_variable(&t);
+			if (valuep == NULL) {
+				if (i)
+					valuep = address_string((char *)p+2);
+				else valuep = address_scalar((char *)p+2);
+			}
+			comma(&t);
+			token_needed(t, VARIABLE);
+			if (is_string_variable(p))
+				if (!is_string_variable(t))
+					error(ERROR_SYNTAX);
+			if (!is_string_variable(p))
+				if (is_string_variable(t))
+					error(ERROR_SYNTAX);
+			valuep2 = dimensioned_variable(&t);
+			if (valuep2 == NULL) {
+				if (i)
+					valuep2 = address_string((char *)p+2);
+				else valuep2 = address_scalar((char *)p+2);
+			}
+			if (i) {
+				s = *(basic_string *)valuep;
+				*(basic_string *)valuep =
+				*(basic_string *)valuep2;
+				*(basic_string *)valuep2 = s;
+			} else {
+				x = *(double *)valuep;
+				*(double *)valuep = *(double *)valuep2;
+				*(double *)valuep2 = x;
+			}
+			break;
+		case OPEN:
+			/* OPEN "IORAB", #n, fn, rlen */
+			++t;
+			{
+				int mode;
+				basic_string filename;
+				int filenumber, reclen;
+
+				s = sexpression(&t);
+				if (s.length == 0)
+					error(ERROR_SYNTAX);
+				mode = s.storage[0];
+				if (('a' <= mode) && (mode <= 'z'))
+					mode = mode - 'a' + 'A';
+				switch (mode) {
+					case 'I': mode = MODE_INPUT; break;
+					case 'O': mode = MODE_OUTPUT; break;
+					case 'R': mode = MODE_RANDOM; break;
+					case 'A': mode = MODE_APPEND; break;
+					case 'B': mode = MODE_BINARY; break;
+					default: error(ERROR_SYNTAX);
+				}
+				comma(&t);
+				token_optional(&t, HASH);
+				filenumber = expression(&t);
+				comma(&t);
+				filename = sexpression(&t);
+				reclen = 128;
+				if (token_optional(&t, COMMA))
+					reclen = expression(&t);
+				open_file(mode, filenumber, cstring(filename),
+				reclen);
+			}
+			break;
+		case CLOSE:
+			++t;
+			if (statement_end(t)) {
+				for (i = 0; i < MAX_FD; ++i)
+					close_file(i);
+			} else {
+				--t;
+				do {
+					++t;
+					token_optional(&t, HASH);
+					x = expression(&t);
+					close_file((int)x);
+				} while (*t == COMMA);
+			}
+			break;
+		case INPUT:
+			++t;
+			if ((*t == HASH) || (*t == CONSTANT)) {
+				token_optional(&t, HASH);
+				select_file(expression(&t));
+				comma(&t);
+			}
+			t = input(t);
+			break;
+		case LINE:
+			/* LINE INPUT */
+			++t;
+			eat_token(&t, INPUT);
+			if ((*t == HASH) || (*t == CONSTANT)) {
+				token_optional(&t, HASH);
+				select_file(expression(&t));
+				comma(&t);
+			}
+			t = line_input(t);
+			break;
+		case FIELD:
+			{
+				int fn, n;
+				char *buf;
+				basic_string s;
+
+				++t;
+				if (token_optional(&t, ON)) {
+					buf = (char *)(size_t)expression(&t);
+				} else {
+					token_optional(&t, HASH);
+					fn = expression(&t);
+					buf = files[fn].buffer;
+				}
+				comma(&t);
+				FOREVER {
+					if (statement_end(t))
+						break;
+					n = expression(&t);
+					eat_token(&t, AS);
+					need_string_variable(t);
+					t += 2;
+					s.length = n;
+					s.storage = buf;
+					create_string((char *)t, s);
+					buf += n;
+					t += t[-1];	/* XXX */
+					token_optional(&t, COMMA);
+				}
+			}
+			break;
+		case GET:
+			{
+				int fn;
+				int rec;
+
+				++t;
+				token_optional(&t, HASH);
+				fn = expression(&t);
+				comma(&t);
+				rec = expression(&t);
+				if (files[fn].mode == MODE_RANDOM) {
+					fseek(pfile(fn),
+					files[fn].reclen * rec, SEEK_SET);
+					fread(files[fn].buffer, files[fn].reclen, 1, pfile(fn));
+				}
+				else error(ERROR_IO);
+			}
+			break;
+		case PUT:
+			{
+				int fn;
+				int rec;
+
+				++t;
+				token_optional(&t, HASH);
+				fn = expression(&t);
+				comma(&t);
+				rec = expression(&t);
+				if (files[fn].mode == MODE_RANDOM) {
+					fseek(pfile(fn), files[fn].reclen * rec, SEEK_SET);
+					fwrite(files[fn].buffer, files[fn].reclen, 1, pfile(fn));
+				}
+				else error(ERROR_IO);
+			}
+			break;
+		case DEF:
+			++t;
+			if (*t == INT) {
+				do
+					t = handle_deftype('%', ++t);
+				while (*t == COMMA);
+			} else if (*t == SNG) {
+				do
+					t = handle_deftype('!', ++t);
+				while (*t == COMMA);
+			} else if (*t == FN) {	/* FN */
+				/* Function definition, record the
+				* start token location
+				*/
+				++t;
+				token_needed(t, VARIABLE);
+				fns[t[2]] = t;
+				t = skip_statement(t) - 1;
+			} else if (*t == STR) {
+				do
+					t = handle_deftype('$', ++t);
+				while (*t == COMMA);
+			} else if (*t == DBL) {
+				do
+					t = handle_deftype('!', ++t);
+				while (*t == COMMA);
+			} else if (*t == SEG) {
+				++t;
+				token_needed(t, EQUAL);
+				seg = expression(&t);
+			} else error(ERROR_SYNTAX);
+			break;
+		case CLEAR:
+			t = skip_statement(t) - 1;
+			fclear();
+			break;
+		case FILES:
+			/* FILES -- pass string to ls command */
+			++t;
+			if (!statement_end(t)) {
+				s = sexpression(&t);
+				sp = cstring(s);
+			}
+			else sp = "";
+			external_execute("ls", sp);
+			break;
+		case KILL:
+			++t;
+			s = sexpression(&t);
+			sp = cstring(s);
+			if (unlink(sp) == -1)
+				error(ERROR_IO);
+			break;
+		case VARS:
+			t = skip_statement(t) - 1;
+			vars();
+			break;
+		case CURSESF:
+			{
+				int f;
+
+				++t;
+				if (*t == ON) {
+					++t;
+					f = 1;
+				} else if (*t == OFF) {
+					++t;
+					f = 0;
+				}
+				else f = expression(&t);
+				if (!use_curses && f)
+					enter_curses();
+				else if (use_curses && !f) {
+					exit_cursesx();
+					ansi_cls();
+				}
+			}
+			break;
+		case RESUME:
+			++t;
+			if (!inerror)
+				error(ERROR_SYNTAX);
+			running = YES;
+			inerror = NO;
+			if (token_optional(&t, NEXT))
+				t = skip_statement(current_loc);
+			else if (statement_end(t))
+				t = current_loc;
+			else {
+				x = onerror;
+				onerror = 0;
+				t = find_line_strict(expression(&t));
+				onerror = x;
+			}
+			continue;
+			break;	// Do we need this?  Wouldn't continue...?
+		case ON:
+			{
+				double idx;
+				int mode;
+
+				++t;
+				if (*t == TIMER) { /* ON TIMER(x) GOSUB */
+					++t;
+					idx = expression(&t);
+					secondsleft = ontimevalue = (int)idx;
+					eat_token(&t, GOSUB);
+					ontimer = t;
+					t = skip_statement(t) - 1;
+					time(&current_time);
+					if (ontimevalue <= 0) {
+						ontimer = NULL;
+						ontimerflag = NO;
+					} else ontimerflag = YES;
+					break;	/* case */
+				} else if (*t == 32) { /* ON ERROR */
+					++t;
+					if (token_optional(&t, RESUME)) {
+						eat_token(&t, NEXT);
+						/* ON ERROR RESUME NEXT */
+						onerror = -1;
+					} else {
+						eat_token(&t, GOTO);
+						/* ON ERROR GOTO */
+						onerror = expression(&t);
+						if (onerror != 0)
+						find_line_strict(onerror);
+					}
+					break; /* case */
+				}
+
+				idx = intx(expression(&t));
+				if (*t == GOSUB) { /* ON e GOSUB */
+					++t;
+					mode = 1;
+				} else if (*t == GOTO) { /* ON e GOTO */
+					++t;
+					mode = 2;
+				} else error(ERROR_SYNTAX);
+				for (; idx > 1; --idx) {
+					expression(&t);
+					token_optional(&t, COMMA);
+					if (statement_end(t))
+						break;
+				}
+				if (idx == 1) {
+					if (mode == 1) {
+						if (gosubstack_ptr >= GOSUB_MAX)
+							error(ERROR_GOSUB);
+						gosubstack[gosubstack_ptr++] = skip_statement(t);
+					}
+					goto bgoto;
+				}
+				t = skip_statement(t) - 1;
+			}
+			break;
+		case TIMER:	/* TIMER ON, OFF, STOP */
+			++t;
+			if (*t == ON) {
+				if (ontimer)
+					ontimerflag = YES;
+			} else if (*t == OFF) {
+				ontimerflag = NO;
+			} else if (*t == STOP) {
+				ontimerflag = NO;
+				ontimer = NULL;
+			} else error(ERROR_SYNTAX);
+			++t;
+			break;
+		case LOCATE:
+			/* LOCATE row,col,cursor,start,stop */
+			if (use_curses) {
+				int row = 0, col = 0, crs = 0;
+				int have_row = NO;
+				int have_col = NO;
+				int have_crs = NO;
+				int y, x;
+
+				++t;
+				if ((*t != COMMA) && !statement_end(t)) {
+				row = expression(&t) - 1;
+				have_row = YES;
+			}
+			token_optional(&t, COMMA);
+			if ((*t != COMMA) && !statement_end(t)) {
+				col = expression(&t) - 1;
+				have_col = YES;
+			}
+			token_optional(&t, COMMA);
+			if ((*t != COMMA) && !statement_end(t)) {
+				crs = expression(&t);
+				have_crs = YES;
+			}
+			token_optional(&t, COMMA);
+			getyx(sc, y, x);
+			if (!have_row)
+				row = y;
+			if (!have_col)
+				col = x;
+			move(row, col);
+			if (have_crs)
+				curs_set(crs);
+			}
+			t = skip_statement(t) - 1;
+			break;
+		case CLS:
+			++t;
+			if (use_curses) {
+				erase();
+				move(0, 0);
+			} else ansi_cls();
+			break;
+		case COLOR:
+			++t;
+			if (use_curses) {
+				int n, f, b;
+
+				f = expression(&t);
+				comma(&t);
+				b = expression(&t);
+				n = ((b & 7) << 3) + (f & 7);
+				/* color_set(n, NULL) is not supported
+				* under Solaris
+				*/
+				attrset(COLOR_PAIR(n));
+				bkgdset(' ' | COLOR_PAIR(n));
+			} else t = skip_statement(t) - 1;
+			break;
+		case NULLF:
+			++t;
+			nulls = expression(&t);
+			break;
+		case CHAIN:
+			/* CHAIN [MERGE] filename
+			*	[,[line exp][,ALL][,DELETE range]]
+			*/
+			{
+				int mergeflag = NO;
+				int allflag = NO;
+				basic_string filename;
+
+				++t;
+				x = -1;
+				only_common_variables();
+				if (*t == MERGE) {
+					if (noedit) error(ERROR_NOEDIT);
+					++t;
+					mergeflag = YES;
+				}
+				filename = sexpression(&t);
+				while (token_optional(&t, COMMA)) {
+					if (*t == ALL) {
+						++t;
+						allflag = YES;
+					} else if (*t == DELETE) {
+						if (noedit) error(ERROR_NOEDIT);
+						++t;
+						t = delete_range(t);
+					} else if (*t == COMMA)
+						;	// do nothing
+					else x = expression(&t);
+				}
+
+				if (!allflag)
+					only_common_variables();
+
+				if (mergeflag)
+					merge(cstring(filename));
+				else load(cstring(filename));
+
+				if (x <= 0)
+					t = sop();
+				else t = find_line_strict(x);
+				clear_execution_state();
+				in_if = 0;
+				running = YES;
+				continue;
+			}
+			// No berak here
+		case WAIT:
+			/* WAIT port,and[,xor]*/
+			++t;
+			x = expression(&t);
+			comma(&t);
+			x1 = expression(&t);
+			if (token_optional(&t, COMMA))
+				x2 = expression(&t);
+			else x2 = 0;
+			waitport(x, x1, x2);
+			break;
+		case ENVIRON:
+			++t;
+			s = sexpression(&t);
+			sp = get_memory_atomic(strlen(cstring(s))+1);
+			strcpy(sp, cstring(s));
+			putenv(sp);
+			free_memory(sp);
+			break;
+		case CHDIR:
+			++t;
+			s = sexpression(&t);
+			sp = cstring(s);
+			if (chdir(sp) == -1)
+				error(ERROR_IO);
+			break;
+		case MKDIR:
+			++t;
+			s = sexpression(&t);
+			sp = cstring(s);
+			if (mkdir(sp, 0777) == -1)
+				error(ERROR_IO);
+			break;
+		case RMDIR:
+			++t;
+			s = sexpression(&t);
+			sp = cstring(s);
+			if (rmdir(sp) == -1)
+				error(ERROR_IO);
+			break;
+		case NAME:
+			++t;
+			s = sexpression(&t);
+			eat_token(&t, AS);
+			s2 = sexpression(&t);
+			if (rename(cstring(s), cstring(s2)) == -1)
+				error(ERROR_IO);
+			break;
+		case WIDTH:
+			++t;
+			pi = &width;
+			if (token_optional(&t, LPRINT))
+				pi = &lwidth;
+			else if (token_optional(&t, HASH)) {
+				pi = &(files[(int)expression(&t)].width);
+				comma(&t);
+			}
+			*pi = expression(&t);
+			/* MBASIC uses 255 as a "magic" number. We use 0, but translate
+			* here.
+			*/
+			if (*pi == 255) *pi = 0;
+			break;
+		case RENUM:
+			x = 0;
+			goto ren_aut;
+		case AUTO:
+			x = 1;
+ren_aut:
+			++t;
+			x1 = 10;
+			x2 = 10;
+			if (!statement_end(t)) {
+				if (*t != COMMA)
+					x1 = expression(&t);
+				if (token_optional(&t, COMMA)) {
+				if (!statement_end(t))
+					x2 = expression(&t);
+				}
+			}
+			if (x == 1)
+				do_auto(x1, x2);
+			else do_renum(x1, x2);
+			break;
+		case MID:
+			assign_mid: ++t;
+			/* MID$(V$,P,L)=SEXP$ */
+			need_string_variable(t);
+			s2 = get_string_variable(&t);
+			eat_token(&t, COMMA);
+			x1 = expression(&t);
+			if (token_optional(&t, COMMA))
+				x2 = expression(&t);
+			else x2 = 999999;
+			closep(&t);
+			eat_token(&t, EQUAL);
+			s = sexpression(&t);
+			for (i = (int)x1; i < (int)(x1 + x2); ++i) {
+				if (i > s2.length) break;
+				if ((i - (int)x1) >= s.length) break;
+				s2.storage[i-1] = s.storage[i-(int)x1];
+			}
+			break;
+		case INTERPRET:
+			/* We don't use tkn_buf, because that will be
+			* in use if someone trys INTERPRET from
+			* keyboard directly
+			*/
+			{
+				unsigned char *tb = get_memory_atomic(MAX_TKN);
+
+				++t;
+				s = sexpression(&t);
+				tokenize_line(cstring(s), tb);
+				execute(tb);
+				free_memory(tb);
+			}
+			break;
+		default:
+			error(ERROR_SYNTAX);
 		}
-	    }
-	    if (x == 1)
-		do_auto(x1, x2);
-	    else
-		do_renum(x1, x2);
-	    break;
-	case MID:
-assign_mid: ++t;
-	    /* MID$(V$,P,L)=SEXP$ */
-	    need_string_variable(t);
-	    s2 = get_string_variable(&t);
-	    eat_token(&t, COMMA);
-	    x1 = expression(&t);
-	    if (token_optional(&t, COMMA))
-		x2 = expression(&t);
-	    else
-		x2 = 999999;
-	    closep(&t);
-	    eat_token(&t, EQUAL);
-	    s = sexpression(&t);
-	    for (i = (int)x1; i < (int)(x1 + x2); ++i) {
-		if (i > s2.length)
-		    break;
-		if ((i - (int)x1) >= s.length)
-		    break;
-		s2.storage[i-1] = s.storage[i-(int)x1];
-	    }
-	    break;
-	case INTERPRET:
-	    /* We don't use tkn_buf, because that will be
-	     * in use if someone trys INTERPRET from
-	     * keyboard directly
-	     */
-	    {
-	    unsigned char *tb = get_memory_atomic(MAX_TKN);
+		select_file(CONSOLE);
+		flush_out();
 
-	    ++t;
-	    s = sexpression(&t);
-	    tokenize_line(cstring(s), tb);
-	    execute(tb);
-	    free_memory(tb);
-	    }
-	    break;
-	default:
-	    error(ERROR_SYNTAX);
+		/* Since we have just executed a statement, the token
+		* must be end of line, end of program, or ':'
+		*/
+		if (*t == EOP) return;
+		if (*t == EOL) in_if = 0;
+		if (*t == ELSE) {
+			if (in_if) {
+				t = skip(t);
+				continue;
+			} else error(ERROR_SYNTAX);
+		}
+		if ((*t != EOL) && (*t != COLON))
+			error(ERROR_SYNTAX);
+		++t;
 	}
-	select_file(CONSOLE);
-	flush_out();
-
-	/* Since we have just executed a statement, the token
-	 * must be end of line, end of program, or ':'
-	 */
-	if (*t == EOP)
-	    return;
-	if (*t == EOL)
-	    in_if = 0;
-	if (*t == ELSE) {
-	    if (in_if) {
-		t = skip(t);
-	    continue;
-	    } else
-		error(ERROR_SYNTAX);
-	}
-	if ((*t != EOL) && (*t != COLON))
-	    error(ERROR_SYNTAX);
-	++t;
-    }
 }
 
 /* Entry for FBASIC interpreter.
@@ -5674,25 +5638,28 @@ assign_mid: ++t;
  */
 
 int main(int ac, char **av) {
-    int prompt;
-    int n;
+	int prompt, n;
 
-    g_ac = ac;
-    g_av = av;
+	g_ac = ac;
+	g_av = av;
 
-    noedit = NO;
-    nulls = 0;
-    program = get_memory_atomic(MAX_PROGRAM);
-    program[0] = START;
-    program[1] = EOP;
-    variables = NULL;
-    use_curses = NO;
-    jbreakflag = NO;
-    select_file(CONSOLE);
-    signal(SIGINT, signal_break);
+	noedit = NO;
+	nulls = 0;
+	program = get_memory_atomic(MAX_PROGRAM);
+	if (program == NULL) {
+		perror("Failed to setup program memory");
+		return 0;
+	}
+	program[0] = START;
+	program[1] = EOP;
+	variables = NULL;
+	use_curses = NO;
+	jbreakflag = NO;
+	select_file(CONSOLE);
+	signal(SIGINT, signal_break);
 
-    clear_execution_state();
-    fclear();
+	clear_execution_state();
+	fclear();
 
     n = strlen(av[0]);
     frun = NO;
@@ -5705,94 +5672,94 @@ int main(int ac, char **av) {
 		frun = YES;
     }
 
-    if (!frun) {
-	sout("FBASIC " VERSION); crlf();
-	sout("Written 2000, 2001, 2022 Fridtjof Weigel"); crlf();
-	sout("MIT Licensed"); crlf();
-	crlf();
+	if (!frun) {
+		sout("FBASIC " VERSION); crlf();
+		sout("Written 2000, 2001, 2022 Fridtjof Weigel"); crlf();
+		sout("Some parts written 2022, the Geek on Skates"); crlf();
+		sout("MIT Licensed"); crlf();
+		crlf();
+	}
+
+	/* main command loop, get a line, tokenize it. If it has a
+	* line number, edit the program, else execute it.
+	*/
+
+	if (setjmp(jerror) != 0) {
+		if ((!inerror) && (onerror != 0) && (running)) {
+			/* XXX use the same mechanism to spring TIMER? */
+			if (onerror < 0) { /* -1 == RESUME NEXT */
+				inerror = NO;
+				execute(skip_statement(current_loc) - 1);
+			} else {
+				inerror = YES;
+				tkn_buf[0] = GOTO;
+				tkn_buf[1] = CONSTANT;
+				W(tkn_buf+2, onerror);
+				tkn_buf[2+sizeof(double)] = EOL;
+				tkn_buf[3+sizeof(double)] = EOP;
+				execute(tkn_buf);
+			}
+		} else {
+			select_file(CONSOLE);
+			crlf();
+			sprintf(src, "Error: %s (%.10G)", error_message(), err);
+			sout(src);
+			if (running) {
+				running = NO;
+				sprintf(src, " in line %.10G", erl);
+				sout(src);
+			}
+			crlf();
+		}
+		if (frun) {
+			exit_cursesx();
+			exit(1);
+		}
+		else goto cont;
     }
 
-    /* main command loop, get a line, tokenize it. If it has a
-     * line number, edit the program, else execute it.
-     */
-
-    if (setjmp(jerror) != 0) {
-	if ((!inerror) && (onerror != 0) && (running)) {
-	    /* XXX use the same mechanism to spring TIMER? */
-	    if (onerror < 0) { /* -1 == RESUME NEXT */
-		inerror = NO;
-		execute(skip_statement(current_loc) - 1);
-	    } else {
-		inerror = YES;
-		tkn_buf[0] = GOTO;
-		tkn_buf[1] = CONSTANT;
-		W(tkn_buf+2, onerror);
-		tkn_buf[2+sizeof(double)] = EOL;
-		tkn_buf[3+sizeof(double)] = EOP;
-		execute(tkn_buf);
-	    }
-	} else {
-	    select_file(CONSOLE);
-	    crlf();
-	    sprintf(src, "Error: %s (%.10G)", error_message(), err);
-	    sout(src);
-	    if (running) {
-		running = NO;
-		sprintf(src, " in line %.10G", erl);
-		sout(src);
-	    }
-	    crlf();
-	}
 	if (frun) {
-	    exit_cursesx();
-	    exit(1);
-	} else
-	    goto cont;
-    }
-
-    if (frun) {
-	if (ac == 1) {
-	    sout("Missing filename");
-	    crlf();
-	} else {
-	    running = NO;
-	    load(av[1]);
-	    tkn_buf[0] = RUN;
-	    tkn_buf[1] = EOL;
-	    tkn_buf[2] = EOP;
-	    execute(tkn_buf);
+		if (ac == 1) {
+			sout("Missing filename");
+			crlf();
+		} else {
+			running = NO;
+			load(av[1]);
+			tkn_buf[0] = RUN;
+			tkn_buf[1] = EOL;
+			tkn_buf[2] = EOP;
+			execute(tkn_buf);
+		}
+		exit_cursesx();
+		return 0;
 	}
-	exit_cursesx();
-	return 0;
-    }
 
-    if (ac > 1)
+	if (ac > 1)
 	load(av[1]);
 
 cont:
-    prompt = YES;
-    FOREVER {
-	running = NO;
-	if (prompt) {
-	    sout("Ok");
-	    crlf();
+	prompt = YES;
+	FOREVER {
+		running = NO;
+		if (prompt) {
+			sout("Ok");
+			crlf();
+		}
+		get_line(src, sizeof(src));
+		tokenize_line(src, tkn_buf);
+		if (tkn_buf[0] == CONSTANT) {
+			if (noedit)
+				error(ERROR_NOEDIT);
+			edit_program(tkn_buf);
+			prompt = NO;
+		} else {
+			if ((tkn_buf[0] == EOL) || ((tkn_buf[0] == EDIT) && (tkn_buf[1] != EOL)))
+				prompt = NO;
+			else prompt = YES;
+			execute(tkn_buf);
+		}
 	}
-	get_line(src, sizeof(src));
-	tokenize_line(src, tkn_buf);
-	if (tkn_buf[0] == CONSTANT) {
-	    if (noedit)
-		error(ERROR_NOEDIT);
-	    edit_program(tkn_buf);
-	    prompt = NO;
-	} else {
-	    if ((tkn_buf[0] == EOL) || ((tkn_buf[0] == EDIT) &&
-					(tkn_buf[1] != EOL)))
-		prompt = NO;
-	    else
-		prompt = YES;
-		execute(tkn_buf);
-	}
-    }
-    exit_cursesx();
-    return 0;
+	exit_cursesx();
+	free(program);
+	return 0;
 }
