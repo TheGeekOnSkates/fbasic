@@ -8,22 +8,8 @@
  *	- random file buffers
  *	- string temporaries
  *	- variables that have been unlinked
- * Currently uses the Boehm-Demers-Weiser conservative garbage
- * collector.
- *
- * Building:
- *
- *     gcc -DUNALIGNED_DOUBLES=1 -Os -o fbasic fbasic.c -lcurses -lm -lgc
- *
- * Note that the 64 bit executable is 60K bytes... the original
- * MBASIC.COM is 20K, and is written in assembler, so we are not
- * far off the mark.
- *
- * Changes: 2.2 - Zero-trip FOR/NEXT rather than one-trip
- *              - Reformat braces
- *              - WIDTH 255 as per MBASIC 5.21
- *              - Skip OPTION statements. We currently do
- *                OPTION BASE 0, and ZEROTRIP FOR/NEXT loops
+ * Previously used the Boehm-Demers-Weiser conservative garbage
+ * collector (I think it was at https://github.com/ivmai/bdwgc).
  *
  * Planned Changes:
  *              - OPTION BASE (0) 1
@@ -33,6 +19,7 @@
  *              - Tolerate double-precision syntax
  *
  * Copyright (c) 2000, 2001, 2022, Fridtjof Weigel
+ * Additional contribution by the Geek on Skates
  * Under MIT License
  */
 
