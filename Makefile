@@ -16,6 +16,12 @@ ubuntu:
 	gcc -DUNALIGNED_DOUBLES=1 -Os -o fbasic fbasic.c -lcurses -lm -lgc
 	#./fbasic
 
+raspbian:
+	echo "Raspbian 32-bit with gc:"
+	sudo apt-get -y install build-essential libgc-dev
+	gcc -Os -o fbasic fbasic.c -lcurses -lm -lgc
+	#./fbasic
+
 mac1:
 	echo "Mac arm64, no gc:"
 	gcc -DUNALIGNED_DOUBLES=1 -Os -o fbasic fbasic.c -lcurses -lm
