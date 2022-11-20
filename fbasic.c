@@ -46,6 +46,9 @@
 
 extern char **environ;
 
+/* https://stackoverflow.com/questions/26284110/strdup-confused-about-warnings-implicit-declaration-makes-pointer-with */
+extern char* strdup(const char*);
+
 /* FBASIC version */
 
 #define VERSION		"2.3"
@@ -979,7 +982,7 @@ static void pty(char *cmd) {
 	for (t = "0123456789abcdef"; !found && *t; ++t) {
 	    sprintf(mastername, "/dev/pty%c%c", *s, *t);
 	    sprintf(slavename, "/dev/tty%c%c", *s, *t);
-	    if ((master = open(mastername, O_RDWR|O_NDELAY|O_SYNC))
+	    if ((master = open(mastername, O_RDWR|ESCDELAY|O_SYNC))
 			    >= 0)
 		found = YES;
 	}
@@ -994,7 +997,7 @@ static void pty(char *cmd) {
 
     char *slavename;
 
-    if ((master = open("/dev/ptmx", O_RDWR|O_NDELAY|O_SYNC)) < 0) {
+    if ((master = open("/dev/ptmx", O_RDWR|ESCDELAY|O_SYNC)) < 0) {
 	perror("/dev/ptmx");
 	return;
     }
