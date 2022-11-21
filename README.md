@@ -100,7 +100,7 @@ This is what takes fbasic from a fun little toy to a powerful tool.  You can use
 
 Creates a folder ("MKDIR" was an ancient expression that meant "make directory".  In this century we call them folders, but since most BASICS call them "directories" we're sticking with MKDIR for compatibility reasons).
 
-### CHDIR "folder name/path"
+### CD or CHDIR "folder name/path"
 
 Changes which folder/directory you're in (like the "cd" command in DOS or Bash or PowerShell).  Again, an easy way to remember this is that it meant "change directory" back when we dinosaurs roamed the earth. :)
 

@@ -369,7 +369,7 @@ static token token_table[] = {
     { "TAN(", TAN }, { "TIME$", TIME }, { "TIMER", TIMER },
     { "TROFF", TROFF }, { "TRON", TRON }, { "VAL(", VAL }, { "WEND", WEND },
     { "WHILE", WHILE }, { "WIDTH", WIDTH }, { "WRITE", WRITE },
-    { "CHDIR", CHDIR }, { "MKDIR", MKDIR }, { "RMDIR", RMDIR },
+    { "CD", CHDIR }, { "CHDIR", CHDIR }, { "MKDIR", MKDIR }, { "RMDIR", RMDIR },
     { "CONT", CONT }, { "SEG", SEG }, { "EDIT", EDIT }, { "CSRLIN", CSRLIN},
     { "FILES", FILES }, { "INKEY$", INKEY }, { "INPUT$(", INPUTS },
     { "INP(", INP }, { "LLIST", LLIST }, { "LPOS(", LPOS },
@@ -5664,10 +5664,15 @@ int main(int ac, char **av) {
 
 	if (!frun) {
 		sout("FBASIC " VERSION); crlf();
-		sout("Written 2000, 2001, 2022 Fridtjof Weigel"); crlf();
-		sout("Some parts written 2022, the Geek on Skates"); crlf();
-		sout("MIT Licensed"); crlf();
 		crlf();
+		// Do we really need all this?
+		// I don't think the MIT license actually requires it.
+		// Especially as the list of contributors grows - right now it's just ratboy666, TheGeekOnSkates and xet7... what if it takes off? :D
+		// Not to mention, I've used a lot of MIT licensed software that doesn't throw it in your face like this. :)
+		//sout("Written 2000, 2001, 2022 Fridtjof Weigel"); crlf();
+		//sout("Some parts written 2022, the Geek on Skates"); crlf();
+		//sout("MIT Licensed"); crlf();
+		//crlf();
 	}
 
 	/* main command loop, get a line, tokenize it. If it has a
